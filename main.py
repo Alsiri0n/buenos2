@@ -12,6 +12,9 @@ from bot.utils import PollStates
 
 
 class Application:
+    """
+    Класс служит для хранения в памяти необходимых переменных
+    """
     config = None
     poll_states = PollStates()
     poll_question = ""
@@ -35,6 +38,12 @@ async def send_welcome(message: types.Message):
 
 
 async def fetch(session, url) -> ClientSession.get:
+    """
+    Функция служит для асинхронного получения данных по url
+    :param session:
+    :param url:
+    :return:
+    """
     async with session.get(url) as response:
         try:
             data = await response.text(), response.status
@@ -47,6 +56,11 @@ async def fetch(session, url) -> ClientSession.get:
 
 
 async def task_for_weather(city="Moscow"):
+    """
+    Вспомогательная функция служит для получения информация о погоде в городе.
+    :param city:
+    :return:
+    """
     url_for_coord = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={app.config.tg_bot.openweather}"
     async with ClientSession() as session:
         result, code = await fetch(session, url_for_coord)
@@ -64,6 +78,12 @@ async def task_for_weather(city="Moscow"):
 
 @dp.message_handler(state='*', commands=["п", "Погода"], commands_prefix="!/")
 async def weather(message: types.Message, command: Command.CommandObj):
+    """
+    Функция служит для обработки ответа пользователя
+    :param message:
+    :param command:
+    :return:
+    """
     city = command.args
     if city:
         result = await task_for_weather(city=city)
@@ -81,6 +101,13 @@ async def weather(message: types.Message, command: Command.CommandObj):
 
 
 async def task_for_course(fr="RUB", to="USD", amount=100):
+    """
+    Вспомогательная функция для создания запроса к сайту с конвертером валют
+    :param fr:
+    :param to:
+    :param amount:
+    :return:
+    """
     url = f"https://api.apilayer.com/exchangerates_data/convert?to={to}&from={fr}&amount={amount}"
     headers = {
         "apikey": app.config.tg_bot.exchange
@@ -105,7 +132,6 @@ async def task_for_course(fr="RUB", to="USD", amount=100):
         result = loads(response)["result"]
     elif code == 400:
         result = loads(response)["error"]["message"]
-        # print(response, code)
     elif code == "timeoutError":
         result = "Сервер недоступен, попробуйте позднее"
     else:
@@ -115,6 +141,12 @@ async def task_for_course(fr="RUB", to="USD", amount=100):
 
 @dp.message_handler(state='*', commands=["к", "Курс"], commands_prefix="!/")
 async def course(message: types.Message, command: Command.CommandObj):
+    """
+    Функция служит для обработки ответа пользователя
+    :param message:
+    :param command:
+    :return:
+    """
     fr, to, amount = ["RUB", "USD", 100]
     if command.args:
         fr, to, amount = command.args.split()[:3]
@@ -131,6 +163,10 @@ async def course(message: types.Message, command: Command.CommandObj):
 
 
 async def task_for_images():
+    """
+    Вспомогательная функция для получения изображения с сайта
+    :return:
+    """
     url = f"https://api.pexels.com/v1/search?query=cats&per_page=1"
     headers = {
         "Authorization": app.config.tg_bot.pexels
@@ -155,7 +191,6 @@ async def task_for_images():
         result = loads(response)["photos"][0]["src"]["small"]
     elif code == 400:
         result = loads(response)["error"]["message"]
-        # print(response, code)
     elif code == "timeoutError":
         result = "Сервер недоступен, попробуйте позднее"
     else:
@@ -165,13 +200,23 @@ async def task_for_images():
 
 @dp.message_handler(state='*', commands=["Картинка"])
 async def picture(message: types.Message):
+    """
+    Функция служит для обработки ответа пользователя
+    :param message:
+    :return:
+    """
     result = await task_for_images()
     # print(result)
     await message.answer_photo(types.InputFile.from_url(result), reply_markup=kb.markup3)
 
 
-@dp.message_handler(state=app.poll_states.STATE_3_ENDED, commands=["p", "Опрос"], commands_prefix="!/")
+@dp.message_handler(state=app.poll_states.STATE_2_QUESTION, commands=["p", "Опрос"], commands_prefix="!/")
 async def poll(message: types.Message):
+    """
+    Вспомогательная функция для создания голосования. Отправляет сформированное голосование в чат.
+    :param message:
+    :return:
+    """
     await message.answer_poll(question=app.poll_question,
                               options=app.poll_answers,
                               is_anonymous=False,
@@ -180,37 +225,51 @@ async def poll(message: types.Message):
     await state.set_state(app.poll_states.all()[0])
 
 
-@dp.message_handler(state=app.poll_states.STATE_2_QUESTION, commands=["p", "Опрос"], commands_prefix="!/")
+@dp.message_handler(state=app.poll_states.STATE_1_ANSWER, commands=["p", "Опрос"], commands_prefix="!/")
 async def poll_answers(message: types.Message, command: Command.CommandObj):
+    """
+    Вспомогательная функиция, реализует получения вариантов ответа на голосование
+    :param message:
+    :param command:
+    :return:
+    """
     if command.args:
         type_of_poll = command.args.split()[0]
         if type_of_poll == "a":
             state = dp.current_state(user=message.from_user.id)
-            await state.set_state(app.poll_states.all()[3])
+            await state.set_state(app.poll_states.all()[2])
             app.poll_answers = command.args.split()[1:]
         await message.reply('Ответы записаны. Введите !p для создания опроса.', reply=False)
 
 
 @dp.message_handler(state="*", commands=["p", "Опрос"], commands_prefix="!/")
 async def poll_question(message: types.Message, command: Command.CommandObj):
+    """
+    Вспомогательная функция реализует получение вопроса для голосования
+    :param message:
+    :param command:
+    :return:
+    """
     if command.args:
         type_of_poll = command.args.split()[0]
         if type_of_poll == "q":
             state = dp.current_state(user=message.from_user.id)
-            await state.set_state(app.poll_states.all()[2])
+            await state.set_state(app.poll_states.all()[1])
             app.poll_question = str(command.args[2:])
         await message.reply('Вопрос записан. Введите ответы через пробел !p a Да Нет Наверное', reply=False)
+    else:
+        await message.reply('Для создания опроса введитe !p q Ваш Вопрос?', reply=False)
 
 
-@dp.message_handler(state='*')
-async def default(message: types.Message):
-    state = dp.current_state(user=message.from_user.id)
-    current_state = await state.get_state()
-    print(current_state)
-    print(app.poll_states.all())
-    await state.set_state(app.poll_states.STATE_0_DEFAULT)
-
-    await message.answer(message.text + MESSAGES["state_reset"])
+# @dp.message_handler(state='*')
+# async def default(message: types.Message):
+#     state = dp.current_state(user=message.from_user.id)
+#     current_state = await state.get_state()
+#     print(current_state)
+#     print(app.poll_states.all())
+#     await state.set_state(app.poll_states.STATE_0_DEFAULT)
+#
+#     await message.answer(message.text + MESSAGES["state_reset"])
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)

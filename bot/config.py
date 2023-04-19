@@ -16,10 +16,19 @@ class TgBotConfig:
 
 @dataclass
 class Config:
+    """
+    Класс реализует хранения секретов
+    """
     tg_bot: TgBotConfig = None
 
 
 def setup_config(app: "Application", config_path: str):
+    """
+    Функция служит для загрузки секретов из файла
+    :param app:
+    :param config_path:
+    :return:
+    """
     load_dotenv(config_path)
     app.config = Config(
         tg_bot=TgBotConfig(

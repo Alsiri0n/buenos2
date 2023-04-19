@@ -2,6 +2,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 
 class Keyboard:
+    """
+    Класс реализует встроенную клавиатуру
+    """
     def __init__(self):
         self.button1 = KeyboardButton('/Погода')
         self.button2 = KeyboardButton('/Курс')
@@ -16,5 +19,3 @@ class Keyboard:
         self.markup5 = ReplyKeyboardMarkup().row(
             self.button1, self.button2, self.button3
         ).add(KeyboardButton('Средний ряд'))
-        inline_btn_1 = InlineKeyboardButton('Weee', callback_data='Weather')
-        self.inline_kb1 = InlineKeyboardMarkup().add(inline_btn_1)
