@@ -1,4 +1,7 @@
+import asyncio.exceptions
 import os
+
+import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.filters import Command
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -37,22 +40,58 @@ async def send_welcome(message: types.Message):
     await message.reply(MESSAGES['start'])
 
 
-async def fetch(session, url) -> ClientSession.get:
+async def fetch(url: str, headers: dict = None) -> tuple[dict, int]:
     """
     Функция служит для асинхронного получения данных по url
-    :param session:
-    :param url:
+    :param url: адрес подключения
+    :param headers: необходимые заголовки для сессии (авторизация)
     :return:
     """
-    async with session.get(url) as response:
-        try:
-            data = await response.text(), response.status
-        except TimeoutError as e:
-            data = "", "timeoutError"
-        except BaseException as e:
-            print(e)
-            data = "", "timeoutError"
-        return data
+    my_timeout = ClientTimeout(
+        total=10,  # default value is 5 minutes, set to `None` for unlimited timeout
+        sock_connect=10,  # How long to wait before an open socket allowed to connect
+        sock_read=10  # How long to wait with no data being read before timing out
+    )
+    if headers is None:
+        headers = {}
+
+    client_args = dict(
+        headers=headers,
+        trust_env=True,
+        timeout=my_timeout
+    )
+    data = ""
+    code = -1
+    try:
+        async with ClientSession(**client_args) as session:
+            async with session.get(url) as response:
+                try:
+                    data, code = await response.text(), response.status
+                except aiohttp.ClientConnectorError as e:
+                    print(e)
+                    data, code = [], "networkError"
+                except aiohttp.ClientResponseError as e:
+                    print(e)
+                    data, code = [], "responseError"
+    except aiohttp.ServerTimeoutError as e:
+        print(e)
+        data, code = "timeoutError", "timeoutError"
+    except Exception as e:
+        print(e)
+
+    if code == 200:
+        result = loads(data)
+    elif code in (range(400, 418)):
+        result = loads(data)["error"]["message"]
+    elif code == "timeoutError":
+        result = "Сервер недоступен, попробуйте позднее."
+    elif code == "responseError":
+        result = "Сервер не отвечает, попробуйте позднее."
+    elif code == "networkError":
+        result = "Проблемы с сетью, попробуй позднее."
+    else:
+        result = ""
+    return result, code
 
 
 async def task_for_weather(city="Moscow"):
@@ -61,108 +100,93 @@ async def task_for_weather(city="Moscow"):
     :param city:
     :return:
     """
-    url_for_coord = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={app.config.tg_bot.openweather}"
-    async with ClientSession() as session:
-        result, code = await fetch(session, url_for_coord)
-        data = loads(result)[0]
+
+    url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={app.config.tg_bot.openweather}"
+    result, code = await fetch(url)
+    if code == 200 and result:
+        data = result[0]
         lon, lat = round(data["lon"], 2), round(data["lat"], 2)
-        url_weather = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={app.config.tg_bot.openweather}&lang=ru"
-        result, code = await fetch(session, url_weather)
-        result = loads(result)
-        data = [result["main"]["temp"] - 273.15,
-                result["weather"][0]["description"],
-                result["main"]["humidity"],
-                result["name"]]
-    return data
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={app.config.tg_bot.openweather}&lang=ru"
+        # Получаем прогноз погоды по координатам
+        result, code = await fetch(url)
+        if code == 200:
+            data = [result["main"]["temp"] - 273.15,
+                    result["weather"][0]["description"],
+                    result["main"]["humidity"],
+                    result["name"]]
+        return data, code
+    else:
+        return "Введите правильные данные", -1
 
 
 @dp.message_handler(state='*', commands=["п", "Погода"], commands_prefix="!/")
 async def weather(message: types.Message, command: Command.CommandObj):
     """
     Функция служит для обработки ответа пользователя
-    :param message:
-    :param command:
+    :param message: сообщение от пользователя
+    :param command: команда
     :return:
     """
     city = command.args
     if city:
-        result = await task_for_weather(city=city)
+        result, code = await task_for_weather(city=city)
     else:
-        result = await task_for_weather()
-    await message.answer(
-        f"""Сейчас в г. {result[3]}
-            Температура:\t{result[0]:.2f}°C
-            Влажность:\t{result[2]}%
-            Облачность:\t{result[1]}
-            
-            
-            Чтобы узнать погоду в своём городе можно указать его вручную, например !п Нью-Йорк""",
-        reply_markup=kb.markup3)
+        result, code = await task_for_weather()
+    if code == 200 and result:
+        await message.answer(
+            f"""Сейчас в г. {result[3]}
+                Температура:\t{result[0]:.2f}°C
+                Влажность:\t{result[2]}%
+                Облачность:\t{result[1]}
+                
+                
+                Чтобы узнать погоду в своём городе можно указать его вручную, например !п Нью-Йорк""",
+            reply_markup=kb.markup3)
+    else:
+        await message.answer(result, reply_markup=kb.markup3)
 
 
 async def task_for_course(fr="RUB", to="USD", amount=100):
     """
     Вспомогательная функция для создания запроса к сайту с конвертером валют
-    :param fr:
-    :param to:
-    :param amount:
+    :param fr: из какой валюты
+    :param to: в какую валюту
+    :param amount: сумма
     :return:
     """
     url = f"https://api.apilayer.com/exchangerates_data/convert?to={to}&from={fr}&amount={amount}"
     headers = {
         "apikey": app.config.tg_bot.exchange
     }
-    my_timeout = ClientTimeout(
-        total=None,  # default value is 5 minutes, set to `None` for unlimited timeout
-        sock_connect=10,  # How long to wait before an open socket allowed to connect
-        sock_read=10  # How long to wait with no data being read before timing out
-    )
-
-    client_args = dict(
-        headers=headers,
-        trust_env=True,
-        timeout=my_timeout
-    )
-    async with ClientSession(**client_args) as session:
-        try:
-            response, code = await fetch(session, url)
-        except TimeoutError as e:
-            response, code = "timeoutError", "timeoutError"
+    result, code = await fetch(url, headers)
     if code == 200:
-        result = loads(response)["result"]
-    elif code == 400:
-        result = loads(response)["error"]["message"]
-    elif code == "timeoutError":
-        result = "Сервер недоступен, попробуйте позднее"
-    else:
-        result = ""
-    return result
+        result = result["result"]
+    return result, code
 
 
 @dp.message_handler(state='*', commands=["к", "Курс"], commands_prefix="!/")
 async def course(message: types.Message, command: Command.CommandObj):
     """
     Функция служит для обработки ответа пользователя
-    :param message:
-    :param command:
+    :param message: сообщение от пользователя
+    :param command: команда
     :return:
     """
     fr, to, amount = ["RUB", "USD", 100]
     if command.args:
         fr, to, amount = command.args.split()[:3]
-    result = await task_for_course(fr=fr, to=to, amount=amount)
-    if result == "Сервер недоступен, попробуйте позднее":
-        await message.answer(result, reply_markup=kb.markup3)
-    elif result == 'You have entered an invalid "from" property. [Example: from=EUR]':
-        await message.answer(result, reply_markup=kb.markup3)
-    elif result == 'You have entered an invalid "to" property. [Example: to=GBP]':
-        await message.answer(result, reply_markup=kb.markup3)
-    else:
+    result, code = await task_for_course(fr=fr, to=to, amount=amount)
+
+    if code == 200:
         await message.answer(f"{amount} {fr} = {result} {to}\n\n Можно использовать вручную, например, !к RUB USD 100",
                              reply_markup=kb.markup3)
+    elif code in range(400, 418):
+        await message.answer(result, reply_markup=kb.markup3)
+    else:
+        await message.answer(result, reply_markup=kb.markup3)
 
 
-async def task_for_images():
+async def task_for_images() -> tuple[str, int]:
     """
     Вспомогательная функция для получения изображения с сайта
     :return:
@@ -171,43 +195,24 @@ async def task_for_images():
     headers = {
         "Authorization": app.config.tg_bot.pexels
     }
-    my_timeout = ClientTimeout(
-        total=None,  # default value is 5 minutes, set to `None` for unlimited timeout
-        sock_connect=10,  # How long to wait before an open socket allowed to connect
-        sock_read=10  # How long to wait with no data being read before timing out
-    )
-
-    client_args = dict(
-        headers=headers,
-        trust_env=True,
-        timeout=my_timeout
-    )
-    async with ClientSession(**client_args) as session:
-        try:
-            response, code = await fetch(session, url)
-        except TimeoutError as e:
-            response, code = "timeoutError", "timeoutError"
+    result, code = await fetch(url, headers)
     if code == 200:
-        result = loads(response)["photos"][0]["src"]["small"]
-    elif code == 400:
-        result = loads(response)["error"]["message"]
-    elif code == "timeoutError":
-        result = "Сервер недоступен, попробуйте позднее"
-    else:
-        result = ""
-    return result
+        result = result["photos"][0]["src"]["small"]
+    return result, code
 
 
 @dp.message_handler(state='*', commands=["Картинка"])
-async def picture(message: types.Message):
+async def images(message: types.Message):
     """
     Функция служит для обработки ответа пользователя
     :param message:
     :return:
     """
-    result = await task_for_images()
-    # print(result)
-    await message.answer_photo(types.InputFile.from_url(result), reply_markup=kb.markup3)
+    result, code = await task_for_images()
+    if code == 200:
+        await message.answer_photo(types.InputFile.from_url(result), reply_markup=kb.markup3)
+    else:
+        await message.answer(result, reply_markup=kb.markup3)
 
 
 @dp.message_handler(state=app.poll_states.STATE_2_QUESTION, commands=["p", "Опрос"], commands_prefix="!/")
@@ -228,9 +233,9 @@ async def poll(message: types.Message):
 @dp.message_handler(state=app.poll_states.STATE_1_ANSWER, commands=["p", "Опрос"], commands_prefix="!/")
 async def poll_answers(message: types.Message, command: Command.CommandObj):
     """
-    Вспомогательная функиция, реализует получения вариантов ответа на голосование
-    :param message:
-    :param command:
+    Вспомогательная функция, реализует получения вариантов ответа на голосование
+    :param message: сообщение от пользователя
+    :param command: команда
     :return:
     """
     if command.args:
@@ -246,8 +251,8 @@ async def poll_answers(message: types.Message, command: Command.CommandObj):
 async def poll_question(message: types.Message, command: Command.CommandObj):
     """
     Вспомогательная функция реализует получение вопроса для голосования
-    :param message:
-    :param command:
+    :param message: сообщение от пользователя
+    :param command: команда
     :return:
     """
     if command.args:
@@ -260,16 +265,6 @@ async def poll_question(message: types.Message, command: Command.CommandObj):
     else:
         await message.reply('Для создания опроса введитe !p q Ваш Вопрос?', reply=False)
 
-
-# @dp.message_handler(state='*')
-# async def default(message: types.Message):
-#     state = dp.current_state(user=message.from_user.id)
-#     current_state = await state.get_state()
-#     print(current_state)
-#     print(app.poll_states.all())
-#     await state.set_state(app.poll_states.STATE_0_DEFAULT)
-#
-#     await message.answer(message.text + MESSAGES["state_reset"])
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
